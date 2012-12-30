@@ -152,6 +152,10 @@ struct intel_encoder {
 	 */
 	bool cloneable;
 	bool connectors_active;
+
+	/* Clear any spurious state leftover from the BIOS */
+	void (*sanitize)(struct intel_encoder *);
+
 	void (*hot_plug)(struct intel_encoder *);
 	void (*pre_enable)(struct intel_encoder *);
 	void (*enable)(struct intel_encoder *);
@@ -181,6 +185,9 @@ struct intel_connector {
 	 * encoder while a modeset is in progress.
 	 */
 	struct intel_encoder *new_encoder;
+
+	/* Clear any spurious state leftover from the BIOS */
+	bool (*sanitize)(struct intel_connector *);
 
 	/* Reads out the current hw, returning true if the connector is enabled
 	 * and active (i.e. dpms ON state). */

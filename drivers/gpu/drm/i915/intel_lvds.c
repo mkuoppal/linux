@@ -171,6 +171,15 @@ static void intel_disable_lvds(struct intel_encoder *encoder)
 	POSTING_READ(lvds_reg);
 }
 
+static void intel_sanitize_lvds(struct intel_encoder *encoder)
+{
+	if (encoder->base.crtc)
+		return;
+
+	/* Make sure the pfitter is off, and everything is in low power state */
+	intel_disable_lvds(encoder);
+}
+
 static int intel_lvds_mode_valid(struct drm_connector *connector,
 				 struct drm_display_mode *mode)
 {
@@ -979,6 +988,7 @@ bool intel_lvds_init(struct drm_device *dev)
 	drm_encoder_init(dev, &intel_encoder->base, &intel_lvds_enc_funcs,
 			 DRM_MODE_ENCODER_LVDS);
 
+	intel_encoder->sanitize = intel_sanitize_lvds;
 	intel_encoder->enable = intel_enable_lvds;
 	intel_encoder->disable = intel_disable_lvds;
 	intel_encoder->get_hw_state = intel_lvds_get_hw_state;

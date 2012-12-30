@@ -9145,6 +9145,12 @@ static void intel_sanitize_crtc(struct intel_crtc *crtc)
 	}
 }
 
+static void intel_sanitize_connector(struct intel_connector *connector)
+{
+	if (connector->sanitize)
+		connector->sanitize(connector);
+}
+
 static void intel_sanitize_encoder(struct intel_encoder *encoder)
 {
 	struct intel_connector *connector;
@@ -9186,6 +9192,9 @@ static void intel_sanitize_encoder(struct intel_encoder *encoder)
 	}
 	/* Enabled encoders without active connectors will be fixed in
 	 * the crtc fixup. */
+
+	if (encoder->sanitize)
+		encoder->sanitize(encoder);
 }
 
 static void i915_redisable_vga(struct drm_device *dev)
@@ -9297,6 +9306,10 @@ void intel_modeset_setup_hw_state(struct drm_device *dev,
 	}
 
 	/* HW state is read out, now we need to sanitize this mess. */
+	list_for_each_entry(connector, &dev->mode_config.connector_list,
+			    base.head)
+		intel_sanitize_connector(connector);
+
 	list_for_each_entry(encoder, &dev->mode_config.encoder_list,
 			    base.head) {
 		intel_sanitize_encoder(encoder);
