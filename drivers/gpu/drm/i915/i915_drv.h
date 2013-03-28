@@ -1933,6 +1933,11 @@ static inline bool i915_terminally_wedged(struct i915_gpu_error *error)
 	return atomic_read(&error->reset_counter) == I915_WEDGED;
 }
 
+static inline u32 i915_reset_count(struct i915_gpu_error *error)
+{
+	return ((atomic_read(&error->reset_counter) & ~I915_WEDGED) + 1) / 2;
+}
+
 void i915_gem_reset(struct drm_device *dev);
 bool i915_gem_clflush_object(struct drm_i915_gem_object *obj, bool force);
 int __must_check i915_gem_object_finish_gpu(struct drm_i915_gem_object *obj);
