@@ -1082,7 +1082,7 @@ struct i915_gpu_error {
 	 * being true.
 	 */
 #define I915_RESET_IN_PROGRESS_FLAG	1
-#define I915_WEDGED			0xffffffff
+#define I915_WEDGED			(1 << 31)
 
 	/**
 	 * Waitqueue to signal when the reset has completed. Used by clients
@@ -2031,12 +2031,17 @@ int __must_check i915_gem_check_wedge(struct i915_gpu_error *error,
 static inline bool i915_reset_in_progress(struct i915_gpu_error *error)
 {
 	return unlikely(atomic_read(&error->reset_counter)
-			& I915_RESET_IN_PROGRESS_FLAG);
+			& (I915_RESET_IN_PROGRESS_FLAG | I915_WEDGED));
 }
 
 static inline bool i915_terminally_wedged(struct i915_gpu_error *error)
 {
-	return atomic_read(&error->reset_counter) == I915_WEDGED;
+	return atomic_read(&error->reset_counter) & I915_WEDGED;
+}
+
+static inline u32 i915_reset_count(struct i915_gpu_error *error)
+{
+	return ((atomic_read(&error->reset_counter) & ~I915_WEDGED) + 1) / 2;
 }
 
 void i915_gem_reset(struct drm_device *dev);
