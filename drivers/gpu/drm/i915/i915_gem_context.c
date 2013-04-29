@@ -274,6 +274,7 @@ void i915_gem_context_fini(struct drm_device *dev)
 	intel_gpu_reset(dev);
 
 	i915_gem_object_unpin(dctx->obj);
+	drm_gem_object_unreference(&dctx->obj->base);
 	i915_gem_context_unreference(dctx);
 }
 
