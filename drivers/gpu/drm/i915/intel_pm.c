@@ -3454,7 +3454,11 @@ static void gen6_enable_rps_interrupts(struct drm_device *dev)
 	I915_WRITE(GEN6_PMIIR, GEN6_PM_RPS_EVENTS);
 	spin_unlock_irq(&dev_priv->irq_lock);
 	/* only unmask PM interrupts we need. Mask all others. */
-	I915_WRITE(GEN6_PMINTRMSK, ~GEN6_PM_RPS_EVENTS);
+
+	/* IVB freezes completely on batchbuffer which jumps into itself
+	 * if GEN6_PM_UP_EI_EXPIRED is masked */
+	I915_WRITE(GEN6_PMINTRMSK,
+		   ~(GEN6_PM_RPS_EVENTS | GEN6_PM_RP_UP_EI_EXPIRED));
 }
 
 static void gen6_enable_rps(struct drm_device *dev)
