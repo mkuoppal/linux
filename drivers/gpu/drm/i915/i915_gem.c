@@ -2209,6 +2209,11 @@ static bool i915_context_is_banned(const struct i915_ctx_hang_stats *hs)
 	if (hs->banned)
 		return true;
 
+	if (hs->ban_on_hang) {
+		DRM_ERROR("context banned on first hang!\n");
+		return true;
+	}
+
 	if (elapsed <= DRM_I915_CTX_BAN_PERIOD) {
 		DRM_ERROR("context hanging too fast, declaring banned!\n");
 		return true;

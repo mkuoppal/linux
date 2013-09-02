@@ -525,6 +525,9 @@ int i915_gem_context_create_ioctl(struct drm_device *dev, void *data,
 		return ret;
 
 	ctx = create_hw_context(dev, file_priv);
+	if (args->flags & I915_CONTEXT_BAN_ON_HANG)
+		ctx->hang_stats.ban_on_hang = true;
+
 	mutex_unlock(&dev->struct_mutex);
 	if (IS_ERR(ctx))
 		return PTR_ERR(ctx);

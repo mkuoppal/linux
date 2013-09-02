@@ -1017,10 +1017,12 @@ struct drm_i915_gem_wait {
 	__s64 timeout_ns;
 };
 
+#define I915_CONTEXT_BAN_ON_HANG  (1 << 0)
+
 struct drm_i915_gem_context_create {
 	/*  output: id of new context*/
 	__u32 ctx_id;
-	__u32 pad;
+	__u32 flags;
 };
 
 struct drm_i915_gem_context_destroy {
