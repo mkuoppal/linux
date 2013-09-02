@@ -591,6 +591,9 @@ struct i915_ctx_hang_stats {
 
 	/* This context is banned to submit more work */
 	bool banned;
+
+	/* Ban on first hang */
+	bool ban_on_hang;
 };
 
 /* This must match up with the value previously used for execbuf2.rsvd1. */
@@ -2068,7 +2071,10 @@ int i915_gem_context_create_ioctl(struct drm_device *dev, void *data,
 				  struct drm_file *file);
 int i915_gem_context_destroy_ioctl(struct drm_device *dev, void *data,
 				   struct drm_file *file);
-
+int i915_gem_context_property_get_ioctl(struct drm_device *dev, void *data,
+					struct drm_file *file);
+int i915_gem_context_property_set_ioctl(struct drm_device *dev, void *data,
+					struct drm_file *file);
 /* i915_gem_gtt.c */
 void i915_gem_cleanup_aliasing_ppgtt(struct drm_device *dev);
 void i915_ppgtt_bind_object(struct i915_hw_ppgtt *ppgtt,

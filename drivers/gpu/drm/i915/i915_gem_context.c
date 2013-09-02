@@ -563,3 +563,82 @@ int i915_gem_context_destroy_ioctl(struct drm_device *dev, void *data,
 	DRM_DEBUG_DRIVER("HW context %d destroyed\n", args->ctx_id);
 	return 0;
 }
+
+int i915_gem_context_property_get_ioctl(struct drm_device *dev, void *data,
+					struct drm_file *file)
+{
+	struct drm_i915_gem_context_property *args = data;
+	struct drm_i915_file_private *file_priv = file->driver_priv;
+	struct i915_hw_context *ctx;
+	int ret;
+
+	if (!(dev->driver->driver_features & DRIVER_GEM))
+		return -ENODEV;
+
+	ret = i915_mutex_lock_interruptible(dev);
+	if (ret)
+		return ret;
+
+	ctx = i915_gem_context_get(file_priv, args->ctx_id);
+	if (!ctx) {
+		mutex_unlock(&dev->struct_mutex);
+		return -ENOENT;
+	}
+
+	ret = 0;
+	switch (args->property) {
+	case I915_CONTEXT_PROPERTY_BAN_STRATEGY:
+		args->val = ctx->hang_stats.ban_on_hang ?
+			I915_BAN_STRATEGY_ON_HANG :
+		I915_BAN_STRATEGY_DEFAULT;
+		break;
+	default:
+		ret = -ENOENT;
+	}
+
+	mutex_unlock(&dev->struct_mutex);
+	return ret;
+}
+
+int i915_gem_context_property_set_ioctl(struct drm_device *dev, void *data,
+					struct drm_file *file)
+{
+	struct drm_i915_gem_context_property *args = data;
+	struct drm_i915_file_private *file_priv = file->driver_priv;
+	struct i915_hw_context *ctx;
+	int ret;
+
+	if (!(dev->driver->driver_features & DRIVER_GEM))
+		return -ENODEV;
+
+	ret = i915_mutex_lock_interruptible(dev);
+	if (ret)
+		return ret;
+
+	ctx = i915_gem_context_get(file_priv, args->ctx_id);
+	if (!ctx) {
+		mutex_unlock(&dev->struct_mutex);
+		return -ENOENT;
+	}
+
+	ret = 0;
+	switch (args->property) {
+	case I915_CONTEXT_PROPERTY_BAN_STRATEGY:
+		switch (args->val) {
+		case I915_BAN_STRATEGY_DEFAULT:
+			ctx->hang_stats.ban_on_hang = false;
+			break;
+		case I915_BAN_STRATEGY_ON_HANG:
+			ctx->hang_stats.ban_on_hang = true;
+			break;
+		default:
+			ret = -EINVAL;
+		}
+		break;
+	default:
+		ret = -ENOENT;
+	}
+
+	mutex_unlock(&dev->struct_mutex);
+	return ret;
+}

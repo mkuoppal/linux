@@ -223,6 +223,8 @@ typedef struct _drm_i915_sarea {
 #define DRM_I915_GEM_GET_CACHING	0x30
 #define DRM_I915_REG_READ		0x31
 #define DRM_I915_GET_RESET_STATS	0x32
+#define DRM_I915_GEM_CONTEXT_PROPERTY_GET 0x33
+#define DRM_I915_GEM_CONTEXT_PROPERTY_SET 0x34
 
 #define DRM_IOCTL_I915_INIT		DRM_IOW( DRM_COMMAND_BASE + DRM_I915_INIT, drm_i915_init_t)
 #define DRM_IOCTL_I915_FLUSH		DRM_IO ( DRM_COMMAND_BASE + DRM_I915_FLUSH)
@@ -273,6 +275,8 @@ typedef struct _drm_i915_sarea {
 #define DRM_IOCTL_I915_GEM_CONTEXT_DESTROY	DRM_IOW (DRM_COMMAND_BASE + DRM_I915_GEM_CONTEXT_DESTROY, struct drm_i915_gem_context_destroy)
 #define DRM_IOCTL_I915_REG_READ			DRM_IOWR (DRM_COMMAND_BASE + DRM_I915_REG_READ, struct drm_i915_reg_read)
 #define DRM_IOCTL_I915_GET_RESET_STATS		DRM_IOWR (DRM_COMMAND_BASE + DRM_I915_GET_RESET_STATS, struct drm_i915_reset_stats)
+#define DRM_IOCTL_I915_GEM_CONTEXT_PROPERTY_GET	DRM_IOWR (DRM_COMMAND_BASE + DRM_I915_GEM_CONTEXT_PROPERTY_GET, struct drm_i915_gem_context_property)
+#define DRM_IOCTL_I915_GEM_CONTEXT_PROPERTY_SET	DRM_IOWR (DRM_COMMAND_BASE + DRM_I915_GEM_CONTEXT_PROPERTY_SET, struct drm_i915_gem_context_property)
 
 /* Allow drivers to submit batchbuffers directly to hardware, relying
  * on the security mechanisms provided by hardware.
@@ -1044,6 +1048,17 @@ struct drm_i915_reset_stats {
 	__u32 batch_active;
 	__u32 batch_pending;
 
+	__u32 pad;
+};
+
+#define I915_CONTEXT_PROPERTY_BAN_STRATEGY 0
+  #define I915_BAN_STRATEGY_DEFAULT        0
+  #define I915_BAN_STRATEGY_ON_HANG        (1 << 0)
+
+struct drm_i915_gem_context_property {
+	__u32 ctx_id;
+	__u64 property;
+	__u64 val;
 	__u32 pad;
 };
 
