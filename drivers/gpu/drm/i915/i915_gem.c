@@ -2106,11 +2106,10 @@ int __i915_add_request(struct intel_ring_buffer *ring,
 {
 	drm_i915_private_t *dev_priv = ring->dev->dev_private;
 	struct drm_i915_gem_request *request;
-	u32 request_ring_position, request_start;
+	u32 request_ring_position;
 	int was_empty;
 	int ret;
 
-	request_start = intel_ring_get_tail(ring);
 	/*
 	 * Emit any outstanding flushes - execbuf can fail to emit the flush
 	 * after having emitted the batchbuffer command. Hence we need to fix
@@ -2139,7 +2138,7 @@ int __i915_add_request(struct intel_ring_buffer *ring,
 
 	request->seqno = intel_ring_get_seqno(ring);
 	request->ring = ring;
-	request->head = request_start;
+	/* request->head setup on allocation */
 	request->tail = request_ring_position;
 
 	/* Whilst this request exists, batch_obj will be on the
@@ -2288,7 +2287,7 @@ static void i915_set_reset_status(struct intel_ring_buffer *ring,
 				  u32 acthd)
 {
 	struct i915_ctx_hang_stats *hs = NULL;
-	bool inside, guilty;
+	bool in_batch, guilty;
 	unsigned long offset = 0;
 
 	/* Innocent until proven guilty */
@@ -2299,10 +2298,10 @@ static void i915_set_reset_status(struct intel_ring_buffer *ring,
 					     request_to_vm(request));
 
 	if (ring->hangcheck.action != HANGCHECK_WAIT &&
-	    i915_request_guilty(request, acthd, &inside)) {
-		DRM_ERROR("%s hung %s bo (0x%lx ctx %d) at 0x%x\n",
+	    i915_request_guilty(request, acthd, &in_batch)) {
+		DRM_ERROR("%s hung inside %s (0x%lx ctx %d) at 0x%x\n",
 			  ring->name,
-			  inside ? "inside" : "flushing",
+			  in_batch ? "batch" : "ringbuffer",
 			  offset,
 			  request->ctx ? request->ctx->id : 0,
 			  acthd);

@@ -1517,6 +1517,7 @@ intel_ring_alloc_seqno(struct intel_ring_buffer *ring)
 		if (request == NULL)
 			return -ENOMEM;
 
+		request->head = intel_ring_get_tail(ring);
 		ring->preallocated_lazy_request = request;
 	}
 
