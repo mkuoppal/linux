@@ -88,6 +88,8 @@ struct  intel_ring_buffer {
 	void		(*irq_put)(struct intel_ring_buffer *ring);
 
 	int		(*init)(struct intel_ring_buffer *ring);
+	int		(*start)(struct intel_ring_buffer *ring,
+				 u32 head, u32 tail, u32 seqno);
 
 	void		(*write_tail)(struct intel_ring_buffer *ring,
 				      u32 value);

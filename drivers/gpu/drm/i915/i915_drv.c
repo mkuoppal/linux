@@ -770,6 +770,9 @@ int i915_reset(struct drm_device *dev)
 		 * some unknown reason, this blows up my ilk, so don't.
 		 */
 
+		for_each_ring(ring, dev_priv, i)
+			ring->start(ring, 0, 0, dev_priv->last_seqno);
+
 		mutex_unlock(&dev->struct_mutex);
 
 		drm_irq_uninstall(dev);

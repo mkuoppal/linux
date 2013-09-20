@@ -387,13 +387,70 @@ static void ring_setup_phys_status_page(struct intel_ring_buffer *ring)
 	I915_WRITE(HWS_PGA, addr);
 }
 
+static int ring_start(struct intel_ring_buffer *ring, u32 head, u32 tail,
+		      u32 seqno)
+{
+	struct drm_device *dev = ring->dev;
+	drm_i915_private_t *dev_priv = dev->dev_private;
+	struct drm_i915_gem_object *obj = ring->obj;
+
+	BUG_ON(I915_READ_CTL(ring) & RING_VALID);
+
+	I915_WRITE_HEAD(ring, head);
+	ring->write_tail(ring, head);
+
+	I915_WRITE_CTL(ring,
+			((ring->size - PAGE_SIZE) & RING_NR_PAGES)
+			| RING_VALID);
+
+	/* If the head is still not zero, the ring is dead */
+	if (wait_for((I915_READ_CTL(ring) & RING_VALID) != 0 &&
+		     I915_READ_START(ring) == i915_gem_obj_ggtt_offset(obj) &&
+		     (I915_READ_HEAD(ring) & HEAD_ADDR) == head, 50)) {
+		DRM_ERROR("%s initialization failed "
+				"ctl %08x head %08x tail %08x start %08x\n",
+				ring->name,
+				I915_READ_CTL(ring),
+				I915_READ_HEAD(ring),
+				I915_READ_TAIL(ring),
+				I915_READ_START(ring));
+		return -EIO;
+	}
+
+	/* If head == tail and ring has been disabled, hw contents is invalid.
+	 * Therefore we initialize the ring seqno in here */
+	intel_ring_init_seqno(ring, seqno);
+
+	ring->write_tail(ring, tail);
+
+	if (!drm_core_check_feature(ring->dev, DRIVER_MODESET))
+		i915_kernel_lost_context(ring->dev);
+	else {
+		ring->head = I915_READ_HEAD(ring);
+		ring->tail = I915_READ_TAIL(ring) & TAIL_ADDR;
+		ring->space = ring_space(ring);
+		ring->last_retired_head = -1;
+	}
+
+	return 0;
+}
+
+static void ring_stop(struct intel_ring_buffer *ring)
+{
+	struct drm_device *dev = ring->dev;
+	drm_i915_private_t *dev_priv = dev->dev_private;
+
+	I915_WRITE_CTL(ring, 0);
+	I915_WRITE_HEAD(ring, 0);
+	ring->write_tail(ring, 0);
+}
+
 static int init_ring_common(struct intel_ring_buffer *ring)
 {
 	struct drm_device *dev = ring->dev;
 	drm_i915_private_t *dev_priv = dev->dev_private;
 	struct drm_i915_gem_object *obj = ring->obj;
-	int ret = 0;
-	u32 head;
+	u32 tmp_head;
 
 	if (HAS_FORCE_WAKE(dev))
 		gen6_gt_force_wake_get(dev_priv);
@@ -404,14 +461,12 @@ static int init_ring_common(struct intel_ring_buffer *ring)
 		ring_setup_phys_status_page(ring);
 
 	/* Stop the ring if it's running. */
-	I915_WRITE_CTL(ring, 0);
-	I915_WRITE_HEAD(ring, 0);
-	ring->write_tail(ring, 0);
+	ring_stop(ring);
 
-	head = I915_READ_HEAD(ring) & HEAD_ADDR;
+	tmp_head = I915_READ_HEAD(ring) & HEAD_ADDR;
 
 	/* G45 ring initialization fails to reset head to zero */
-	if (head != 0) {
+	if (tmp_head != 0) {
 		DRM_DEBUG_KMS("%s head not reset to zero "
 			      "ctl %08x head %08x tail %08x start %08x\n",
 			      ring->name,
@@ -438,41 +493,13 @@ static int init_ring_common(struct intel_ring_buffer *ring)
 	 * also enforces ordering), otherwise the hw might lose the new ring
 	 * register values. */
 	I915_WRITE_START(ring, i915_gem_obj_ggtt_offset(obj));
-	I915_WRITE_CTL(ring,
-			((ring->size - PAGE_SIZE) & RING_NR_PAGES)
-			| RING_VALID);
-
-	/* If the head is still not zero, the ring is dead */
-	if (wait_for((I915_READ_CTL(ring) & RING_VALID) != 0 &&
-		     I915_READ_START(ring) == i915_gem_obj_ggtt_offset(obj) &&
-		     (I915_READ_HEAD(ring) & HEAD_ADDR) == 0, 50)) {
-		DRM_ERROR("%s initialization failed "
-				"ctl %08x head %08x tail %08x start %08x\n",
-				ring->name,
-				I915_READ_CTL(ring),
-				I915_READ_HEAD(ring),
-				I915_READ_TAIL(ring),
-				I915_READ_START(ring));
-		ret = -EIO;
-		goto out;
-	}
-
-	if (!drm_core_check_feature(ring->dev, DRIVER_MODESET))
-		i915_kernel_lost_context(ring->dev);
-	else {
-		ring->head = I915_READ_HEAD(ring);
-		ring->tail = I915_READ_TAIL(ring) & TAIL_ADDR;
-		ring->space = ring_space(ring);
-		ring->last_retired_head = -1;
-	}
 
 	memset(&ring->hangcheck, 0, sizeof(ring->hangcheck));
 
-out:
 	if (HAS_FORCE_WAKE(dev))
 		gen6_gt_force_wake_put(dev_priv);
 
-	return ret;
+	return 0;
 }
 
 static int
@@ -1293,6 +1320,10 @@ static int intel_init_ring_buffer(struct drm_device *dev,
 	if (ret)
 		goto err_unmap;
 
+	ret = ring->start(ring, 0, 0, 0);
+	if (ret)
+		goto err_unmap;
+
 	/* Workaround an erratum on the i830 which causes a hang if
 	 * the TAIL pointer points to within the last 2 cachelines
 	 * of the buffer.
@@ -1330,7 +1361,7 @@ void intel_cleanup_ring_buffer(struct intel_ring_buffer *ring)
 		DRM_ERROR("failed to quiesce %s whilst cleaning up: %d\n",
 			  ring->name, ret);
 
-	I915_WRITE_CTL(ring, 0);
+	ring_stop(ring);
 
 	iounmap(ring->virtual_start);
 
@@ -1790,6 +1821,7 @@ int intel_init_render_ring_buffer(struct drm_device *dev)
 		ring->dispatch_execbuffer = i830_dispatch_execbuffer;
 	else
 		ring->dispatch_execbuffer = i915_dispatch_execbuffer;
+	ring->start = ring_start;
 	ring->init = init_render_ring;
 	ring->cleanup = render_ring_cleanup;
 
@@ -1858,6 +1890,7 @@ int intel_render_ring_init_dri(struct drm_device *dev, u64 start, u32 size)
 		ring->dispatch_execbuffer = i830_dispatch_execbuffer;
 	else
 		ring->dispatch_execbuffer = i915_dispatch_execbuffer;
+	ring->start = ring_start;
 	ring->init = init_render_ring;
 	ring->cleanup = render_ring_cleanup;
 
@@ -1934,6 +1967,7 @@ int intel_init_bsd_ring_buffer(struct drm_device *dev)
 		}
 		ring->dispatch_execbuffer = i965_dispatch_execbuffer;
 	}
+	ring->start = ring_start;
 	ring->init = init_ring_common;
 
 	return intel_init_ring_buffer(dev, ring);
@@ -1966,6 +2000,7 @@ int intel_init_blt_ring_buffer(struct drm_device *dev)
 	ring->signal_mbox[VCS] = GEN6_VBSYNC;
 	ring->signal_mbox[BCS] = GEN6_NOSYNC;
 	ring->signal_mbox[VECS] = GEN6_VEBSYNC;
+	ring->start = ring_start;
 	ring->init = init_ring_common;
 
 	return intel_init_ring_buffer(dev, ring);
@@ -1998,6 +2033,7 @@ int intel_init_vebox_ring_buffer(struct drm_device *dev)
 	ring->signal_mbox[VCS] = GEN6_VVESYNC;
 	ring->signal_mbox[BCS] = GEN6_BVESYNC;
 	ring->signal_mbox[VECS] = GEN6_NOSYNC;
+	ring->start = ring_start;
 	ring->init = init_ring_common;
 
 	return intel_init_ring_buffer(dev, ring);
