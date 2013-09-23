@@ -2401,8 +2401,30 @@ void i915_gem_reset(struct drm_device *dev)
 
 	for_each_ring(ring, dev_priv, i)
 		i915_gem_reset_ring_lists(dev_priv, ring);
+}
+
+void i915_gem_post_reset(struct drm_device *dev)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	struct intel_ring_buffer *ring;
+	int i, ret;
+
+	i915_gem_init_swizzling(dev);
+
+	for_each_ring(ring, dev_priv, i)
+		ring->init(ring);
+
+	i915_gem_context_init(dev);
+	if (dev_priv->mm.aliasing_ppgtt) {
+		ret = dev_priv->mm.aliasing_ppgtt->enable(dev);
+		if (ret)
+			i915_gem_cleanup_aliasing_ppgtt(dev);
+	}
 
 	i915_gem_restore_fences(dev);
+
+	for_each_ring(ring, dev_priv, i)
+		ring->start(ring, 0, 0, dev_priv->last_seqno);
 }
 
 /**

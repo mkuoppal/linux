@@ -1976,6 +1976,7 @@ static inline bool i915_terminally_wedged(struct i915_gpu_error *error)
 }
 
 void i915_gem_reset(struct drm_device *dev);
+void i915_gem_post_reset(struct drm_device *dev);
 bool i915_gem_clflush_object(struct drm_i915_gem_object *obj, bool force);
 int __must_check i915_gem_object_finish_gpu(struct drm_i915_gem_object *obj);
 int __must_check i915_gem_init(struct drm_device *dev);
