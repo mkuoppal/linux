@@ -2267,6 +2267,20 @@ static bool i915_request_guilty(struct drm_i915_gem_request *request,
 	return false;
 }
 
+static struct i915_ctx_hang_stats *
+i915_request_hangstats(const struct drm_i915_gem_request *request)
+{
+	/* If contexts are disabled or this is the default context, use
+	 * file_priv->hang_stats;
+	 */
+	if (request->ctx && request->ctx->id != DEFAULT_CONTEXT_ID)
+		return &request->ctx->hang_stats;
+	else if (request->file_priv)
+		return &request->file_priv->hang_stats;
+
+	return NULL;
+}
+
 static bool i915_context_is_banned(const struct i915_ctx_hang_stats *hs)
 {
 	const unsigned long elapsed = get_seconds() - hs->guilty_ts;
@@ -2286,7 +2300,7 @@ static void i915_set_reset_status(struct intel_ring_buffer *ring,
 				  struct drm_i915_gem_request *request,
 				  u32 acthd)
 {
-	struct i915_ctx_hang_stats *hs = NULL;
+	struct i915_ctx_hang_stats *hs;
 	bool in_batch, guilty;
 	unsigned long offset = 0;
 
@@ -2309,21 +2323,12 @@ static void i915_set_reset_status(struct intel_ring_buffer *ring,
 		guilty = true;
 	}
 
-	/* If contexts are disabled or this is the default context, use
-	 * file_priv->reset_state
-	 */
-	if (request->ctx && request->ctx->id != DEFAULT_CONTEXT_ID)
-		hs = &request->ctx->hang_stats;
-	else if (request->file_priv)
-		hs = &request->file_priv->hang_stats;
-
+	hs = i915_request_hangstats(request);
 	if (hs) {
 		if (guilty) {
 			hs->banned = i915_context_is_banned(hs);
 			hs->batch_active++;
 			hs->guilty_ts = get_seconds();
-		} else {
-			hs->batch_pending++;
 		}
 	}
 }
@@ -2342,23 +2347,18 @@ static void i915_gem_free_request(struct drm_i915_gem_request *request)
 static void i915_gem_reset_ring_lists(struct drm_i915_private *dev_priv,
 				      struct intel_ring_buffer *ring)
 {
+	struct drm_i915_gem_request *request, *next;
 	u32 completed_seqno;
 	u32 acthd;
 
 	acthd = intel_ring_get_active_head(ring);
 	completed_seqno = ring->get_seqno(ring, false);
 
-	while (!list_empty(&ring->request_list)) {
-		struct drm_i915_gem_request *request;
-
-		request = list_first_entry(&ring->request_list,
-					   struct drm_i915_gem_request,
-					   list);
-
+	list_for_each_entry_safe(request, next, &ring->request_list, list) {
 		if (request->seqno > completed_seqno)
 			i915_set_reset_status(ring, request, acthd);
-
-		i915_gem_free_request(request);
+		else
+			i915_gem_free_request(request);
 	}
 
 	while (!list_empty(&ring->active_list)) {
@@ -2367,6 +2367,9 @@ static void i915_gem_reset_ring_lists(struct drm_i915_private *dev_priv,
 		obj = list_first_entry(&ring->active_list,
 				       struct drm_i915_gem_object,
 				       ring_list);
+
+		if (!i915_seqno_passed(completed_seqno, obj->last_read_seqno))
+			break;
 
 		i915_gem_object_move_to_inactive(obj);
 	}
@@ -2391,6 +2394,47 @@ void i915_gem_restore_fences(struct drm_device *dev)
 			i915_gem_write_fence(dev, i, NULL);
 		}
 	}
+}
+
+static void i915_gem_clear_request_ring(struct intel_ring_buffer *ring)
+{
+	if (list_empty(&ring->request_list))
+		return;
+
+	while (!list_empty(&ring->request_list)) {
+		struct drm_i915_gem_request *request;
+		struct i915_ctx_hang_stats *hs;
+
+		request = list_first_entry(&ring->request_list,
+					   struct drm_i915_gem_request,
+					   list);
+
+		hs = i915_request_hangstats(request);
+		if (hs)
+			hs->batch_pending++;
+
+		i915_gem_free_request(request);
+	}
+
+	while (!list_empty(&ring->active_list)) {
+		struct drm_i915_gem_object *obj;
+
+		obj = list_first_entry(&ring->active_list,
+				       struct drm_i915_gem_object,
+				       ring_list);
+
+		i915_gem_object_move_to_inactive(obj);
+	}
+}
+
+static void i915_gem_replay_requests(struct drm_device *dev)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	struct intel_ring_buffer *ring;
+	int i;
+
+	for_each_ring(ring, dev_priv, i)
+		i915_gem_clear_request_ring(ring);
 }
 
 void i915_gem_reset(struct drm_device *dev)
@@ -2420,6 +2464,8 @@ void i915_gem_post_reset(struct drm_device *dev)
 		if (ret)
 			i915_gem_cleanup_aliasing_ppgtt(dev);
 	}
+
+	i915_gem_replay_requests(dev);
 
 	i915_gem_restore_fences(dev);
 
