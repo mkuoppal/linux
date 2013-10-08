@@ -49,6 +49,14 @@ struct intel_ring_hangcheck {
 	enum intel_ring_hangcheck_action action;
 };
 
+struct intel_ring_replay {
+	u32 head;
+	u32 tail;
+	u32 completed_seqno;
+	u32 hanged_seqno;
+	u32 last_request_seqno;
+};
+
 struct  intel_ring_buffer {
 	const char	*name;
 	enum intel_ring_id {
@@ -158,6 +166,7 @@ struct  intel_ring_buffer {
 	struct i915_hw_context *last_context;
 
 	struct intel_ring_hangcheck hangcheck;
+	struct intel_ring_replay replay;
 
 	struct {
 		struct drm_i915_gem_object *obj;

@@ -2302,7 +2302,7 @@ static bool i915_context_is_banned(const struct i915_ctx_hang_stats *hs)
 	return false;
 }
 
-static void i915_set_reset_status(struct intel_ring_buffer *ring,
+static bool i915_set_reset_status(struct intel_ring_buffer *ring,
 				  struct drm_i915_gem_request *request,
 				  u32 acthd)
 {
@@ -2335,8 +2335,11 @@ static void i915_set_reset_status(struct intel_ring_buffer *ring,
 			hs->banned = i915_context_is_banned(hs);
 			hs->batch_active++;
 			hs->guilty_ts = get_seconds();
+			return true;
 		}
 	}
+
+	return false;
 }
 
 static void i915_gem_free_request(struct drm_i915_gem_request *request)
@@ -2350,6 +2353,17 @@ static void i915_gem_free_request(struct drm_i915_gem_request *request)
 	kfree(request);
 }
 
+static void i915_gem_init_ring_replay(struct intel_ring_buffer *ring, u32 seqno)
+{
+	struct intel_ring_replay *replay = &ring->replay;
+
+	replay->head = 0;
+	replay->tail = ring->tail;
+	replay->completed_seqno = seqno;
+	replay->hanged_seqno = 0;
+	replay->last_request_seqno = 0;
+}
+
 static void i915_gem_reset_ring_lists(struct drm_i915_private *dev_priv,
 				      struct intel_ring_buffer *ring)
 {
@@ -2360,11 +2374,15 @@ static void i915_gem_reset_ring_lists(struct drm_i915_private *dev_priv,
 	acthd = intel_ring_get_active_head(ring);
 	completed_seqno = ring->get_seqno(ring, false);
 
+	i915_gem_init_ring_replay(ring, completed_seqno);
+
 	list_for_each_entry_safe(request, next, &ring->request_list, list) {
-		if (request->seqno > completed_seqno)
-			i915_set_reset_status(ring, request, acthd);
-		else
+		if (request->seqno > completed_seqno) {
+			if (i915_set_reset_status(ring, request, acthd))
+				ring->replay.hanged_seqno = request->seqno;
+		} else {
 			i915_gem_free_request(request);
+		}
 	}
 
 	while (!list_empty(&ring->active_list)) {
@@ -2433,14 +2451,117 @@ static void i915_gem_clear_request_ring(struct intel_ring_buffer *ring)
 	}
 }
 
-static void i915_gem_replay_requests(struct drm_device *dev)
+static bool i915_gem_request_is_banned(struct drm_i915_gem_request *request)
+{
+	struct i915_ctx_hang_stats *hs;
+
+	if (request->ring->replay.hanged_seqno == request->seqno)
+		return true;
+
+	hs = i915_request_hangstats(request);
+	if (hs)
+		return hs->banned;
+
+	return false;
+}
+
+static void
+i915_gem_request_erase_ring(struct drm_i915_gem_request *request)
+{
+	struct intel_ring_buffer *ring = request->ring;
+	struct i915_ctx_hang_stats *hs;
+	void __iomem *virt = ring->virtual_start;
+	u32 offset;
+#define MI_OPCODE_MASK (~((1 << 23) - 1))
+#define ring_advance(x) (x = (x + 4) & (ring->size - 1))
+
+	hs = i915_request_hangstats(request);
+	if (hs)
+		hs->batch_pending++;
+
+	offset = request->head;
+
+	while (offset != request->tail) {
+		const u32 cmd = ioread32(virt + offset);
+
+		switch (cmd & MI_OPCODE_MASK) {
+
+		case MI_BATCH_BUFFER_START:
+			iowrite32(MI_NOOP, virt + offset);
+			ring_advance(offset);
+			iowrite32(MI_NOOP, virt + offset);
+			break;
+
+		case MI_BATCH_BUFFER:
+			iowrite32(MI_NOOP, virt + offset);
+			ring_advance(offset);
+			iowrite32(MI_NOOP, virt + offset);
+			ring_advance(offset);
+			iowrite32(MI_NOOP, virt + offset);
+			break;
+		}
+
+		ring_advance(offset);
+	}
+#undef MI_OPCODE_MASK
+#undef ring_advance
+}
+
+static void i915_gem_replay_requests_ring(struct intel_ring_buffer *ring)
+{
+	struct drm_i915_gem_request *request;
+	struct intel_ring_replay *replay = &ring->replay;
+
+	if (list_empty(&ring->request_list)) {
+		replay->head = 0;
+		replay->tail = 0;
+		return;
+	}
+
+	request = list_first_entry(&ring->request_list,
+				   struct drm_i915_gem_request,
+				   list);
+
+	replay->head = request->head;
+
+	list_for_each_entry(request, &ring->request_list, list) {
+		if (request->seqno > replay->last_request_seqno)
+			replay->last_request_seqno = request->seqno;
+
+		if (i915_gem_request_is_banned(request))
+			i915_gem_request_erase_ring(request);
+	}
+}
+
+static u32 i915_gem_replay_requests(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	struct intel_ring_buffer *ring;
+	u32 last_seqno = 0;
+	bool guilty_found = false;
 	int i;
 
-	for_each_ring(ring, dev_priv, i)
-		i915_gem_clear_request_ring(ring);
+	for_each_ring(ring, dev_priv, i) {
+		if (ring->replay.hanged_seqno)
+			guilty_found = true;
+	}
+
+	/* If we found guilty one, prepare to replay requests and find
+	   a last seqno which was in request queues. If no guilty was found
+	   then we need to clear everything
+	*/
+	if (guilty_found) {
+		for_each_ring(ring, dev_priv, i) {
+			i915_gem_replay_requests_ring(ring);
+			if (ring->replay.last_request_seqno > last_seqno)
+				last_seqno = ring->replay.last_request_seqno;
+		}
+	} else {
+		for_each_ring(ring, dev_priv, i)
+			i915_gem_clear_request_ring(ring);
+	}
+
+	return last_seqno;
 }
 
 void i915_gem_reset(struct drm_device *dev)
@@ -2458,6 +2579,7 @@ void i915_gem_post_reset(struct drm_device *dev)
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	struct intel_ring_buffer *ring;
 	int i, ret;
+	u32 last_seqno;
 
 	i915_gem_init_swizzling(dev);
 
@@ -2471,12 +2593,28 @@ void i915_gem_post_reset(struct drm_device *dev)
 			i915_gem_cleanup_aliasing_ppgtt(dev);
 	}
 
-	i915_gem_replay_requests(dev);
+	last_seqno = i915_gem_replay_requests(dev);
 
 	i915_gem_restore_fences(dev);
 
-	for_each_ring(ring, dev_priv, i)
-		ring->start(ring, 0, 0, dev_priv->last_seqno);
+	/* If no last_seqno was found, replay preparation failed */
+	if (!last_seqno) {
+		for_each_ring(ring, dev_priv, i)
+			ring->start(ring, 0, 0, dev_priv->last_seqno);
+
+		return;
+	}
+
+	i915_gem_init_seqno(dev, last_seqno + 1);
+
+	for_each_ring(ring, dev_priv, i) {
+		const struct intel_ring_replay *replay = &ring->replay;
+
+		ring->start(ring, replay->head, replay->tail,
+			    replay->completed_seqno);
+	}
+
+	i915_queue_hangcheck(dev);
 }
 
 /**
