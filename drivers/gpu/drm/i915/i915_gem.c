@@ -2360,6 +2360,7 @@ static void i915_gem_init_ring_replay(struct intel_ring_buffer *ring, u32 seqno)
 	replay->head = 0;
 	replay->tail = ring->tail;
 	replay->completed_seqno = seqno;
+	replay->prev_hanged_seqno = replay->hanged_seqno;
 	replay->hanged_seqno = 0;
 	replay->last_request_seqno = 0;
 }
@@ -2507,9 +2508,26 @@ i915_gem_request_erase_ring(struct drm_i915_gem_request *request)
 #undef ring_advance
 }
 
+static void
+i915_gem_request_move_to_inactive(struct drm_i915_gem_request *request)
+{
+	struct drm_i915_gem_object *obj, *next;
+	struct intel_ring_buffer *ring = request->ring;
+	const u32 seqno = request->seqno;
+
+	i915_gem_object_move_to_inactive(request->batch_obj);
+
+	list_for_each_entry_safe(obj, next, &ring->active_list, ring_list) {
+		if (obj->last_read_seqno == seqno)
+			i915_gem_object_move_to_inactive(obj);
+		else if (obj->last_read_seqno > seqno)
+			break;
+	}
+}
+
 static void i915_gem_replay_requests_ring(struct intel_ring_buffer *ring)
 {
-	struct drm_i915_gem_request *request;
+	struct drm_i915_gem_request *request, *first, *next;
 	struct intel_ring_replay *replay = &ring->replay;
 
 	if (list_empty(&ring->request_list)) {
@@ -2518,19 +2536,41 @@ static void i915_gem_replay_requests_ring(struct intel_ring_buffer *ring)
 		return;
 	}
 
-	request = list_first_entry(&ring->request_list,
-				   struct drm_i915_gem_request,
-				   list);
+	first = list_first_entry(&ring->request_list,
+				 struct drm_i915_gem_request,
+				 list);
 
-	replay->head = request->head;
-
-	list_for_each_entry(request, &ring->request_list, list) {
+	list_for_each_entry_safe(request, next, &ring->request_list, list) {
 		if (request->seqno > replay->last_request_seqno)
 			replay->last_request_seqno = request->seqno;
 
 		if (i915_gem_request_is_banned(request))
 			i915_gem_request_erase_ring(request);
+
+		/* To guard against reset loop in replay, we check if this seqno
+		   caused previous hang
+		*/
+		if (request->seqno == replay->prev_hanged_seqno) {
+			WARN_ON(request != first);
+			DRM_ERROR("REPLAY: seqno 0x%x double hang\n",
+				  request->seqno);
+			i915_gem_request_move_to_inactive(request);
+			i915_gem_free_request(request);
+		}
 	}
+
+	/* If we removed the only request, no need for replay*/
+	if (list_empty(&ring->request_list)) {
+		replay->head = 0;
+		replay->tail = 0;
+		return;
+	}
+
+	first = list_first_entry(&ring->request_list,
+				 struct drm_i915_gem_request,
+				 list);
+
+	replay->head = first->head;
 }
 
 static u32 i915_gem_replay_requests(struct drm_device *dev)

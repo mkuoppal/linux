@@ -55,6 +55,7 @@ struct intel_ring_replay {
 	u32 completed_seqno;
 	u32 hanged_seqno;
 	u32 last_request_seqno;
+	u32 prev_hanged_seqno;
 };
 
 struct  intel_ring_buffer {
