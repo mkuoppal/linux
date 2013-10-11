@@ -1571,10 +1571,16 @@ void intel_ring_init_seqno(struct intel_ring_buffer *ring, u32 seqno)
 	BUG_ON(ring->outstanding_lazy_seqno);
 
 	if (INTEL_INFO(ring->dev)->gen >= 6) {
-		I915_WRITE(RING_SYNC_0(ring->mmio_base), 0);
-		I915_WRITE(RING_SYNC_1(ring->mmio_base), 0);
-		if (HAS_VEBOX(ring->dev))
-			I915_WRITE(RING_SYNC_2(ring->mmio_base), 0);
+		struct intel_ring_buffer *to;
+		int i;
+
+		for_each_ring(to, dev_priv, i) {
+			const u32 mbox_reg = ring->signal_mbox[i];
+			if (mbox_reg != GEN6_NOSYNC) {
+				I915_WRITE(mbox_reg, seqno);
+				POSTING_READ(mbox_reg);
+			}
+		}
 	}
 
 	ring->set_seqno(ring, seqno);
