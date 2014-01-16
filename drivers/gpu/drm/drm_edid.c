@@ -2562,25 +2562,40 @@ add_alternate_cea_modes(struct drm_connector *connector, struct edid *edid)
 	return modes;
 }
 
+static struct drm_display_mode *
+drm_display_mode_from_vic_index(struct drm_connector *connector,
+				const u8 *video_db, u8 video_len,
+				u8 video_index)
+{
+	struct drm_device *dev = connector->dev;
+	struct drm_display_mode *newmode;
+	u8 cea_mode;
+
+	if (video_db == NULL || video_index >= video_len)
+		return NULL;
+
+	/* CEA modes are numbered 1..127 */
+	cea_mode = (video_db[video_index] & 127) - 1;
+	if (cea_mode >= ARRAY_SIZE(edid_cea_modes))
+		return NULL;
+
+	newmode = drm_mode_duplicate(dev, &edid_cea_modes[cea_mode]);
+	newmode->vrefresh = 0;
+
+	return newmode;
+}
+
 static int
 do_cea_modes(struct drm_connector *connector, const u8 *db, u8 len)
 {
-	struct drm_device *dev = connector->dev;
-	const u8 *mode;
-	u8 cea_mode;
-	int modes = 0;
+	int i, modes = 0;
 
-	for (mode = db; mode < db + len; mode++) {
-		cea_mode = (*mode & 127) - 1; /* CEA modes are numbered 1..127 */
-		if (cea_mode < ARRAY_SIZE(edid_cea_modes)) {
-			struct drm_display_mode *newmode;
-			newmode = drm_mode_duplicate(dev,
-						     &edid_cea_modes[cea_mode]);
-			if (newmode) {
-				newmode->vrefresh = 0;
-				drm_mode_probed_add(connector, newmode);
-				modes++;
-			}
+	for (i = 0; i < len; i++) {
+		struct drm_display_mode *mode;
+		mode = drm_display_mode_from_vic_index(connector, db, len, i);
+		if (mode) {
+			drm_mode_probed_add(connector, mode);
+			modes++;
 		}
 	}
 
@@ -2674,21 +2689,13 @@ static int add_hdmi_mode(struct drm_connector *connector, u8 vic)
 static int add_3d_struct_modes(struct drm_connector *connector, u16 structure,
 			       const u8 *video_db, u8 video_len, u8 video_index)
 {
-	struct drm_device *dev = connector->dev;
 	struct drm_display_mode *newmode;
 	int modes = 0;
-	u8 cea_mode;
-
-	if (video_db == NULL || video_index >= video_len)
-		return 0;
-
-	/* CEA modes are numbered 1..127 */
-	cea_mode = (video_db[video_index] & 127) - 1;
-	if (cea_mode >= ARRAY_SIZE(edid_cea_modes))
-		return 0;
 
 	if (structure & (1 << 0)) {
-		newmode = drm_mode_duplicate(dev, &edid_cea_modes[cea_mode]);
+		newmode = drm_display_mode_from_vic_index(connector, video_db,
+							  video_len,
+							  video_index);
 		if (newmode) {
 			newmode->flags |= DRM_MODE_FLAG_3D_FRAME_PACKING;
 			drm_mode_probed_add(connector, newmode);
@@ -2696,7 +2703,9 @@ static int add_3d_struct_modes(struct drm_connector *connector, u16 structure,
 		}
 	}
 	if (structure & (1 << 6)) {
-		newmode = drm_mode_duplicate(dev, &edid_cea_modes[cea_mode]);
+		newmode = drm_display_mode_from_vic_index(connector, video_db,
+							  video_len,
+							  video_index);
 		if (newmode) {
 			newmode->flags |= DRM_MODE_FLAG_3D_TOP_AND_BOTTOM;
 			drm_mode_probed_add(connector, newmode);
@@ -2704,7 +2713,9 @@ static int add_3d_struct_modes(struct drm_connector *connector, u16 structure,
 		}
 	}
 	if (structure & (1 << 8)) {
-		newmode = drm_mode_duplicate(dev, &edid_cea_modes[cea_mode]);
+		newmode = drm_display_mode_from_vic_index(connector, video_db,
+							  video_len,
+							  video_index);
 		if (newmode) {
 			newmode->flags |= DRM_MODE_FLAG_3D_SIDE_BY_SIDE_HALF;
 			drm_mode_probed_add(connector, newmode);
@@ -2728,7 +2739,7 @@ static int
 do_hdmi_vsdb_modes(struct drm_connector *connector, const u8 *db, u8 len,
 		   const u8 *video_db, u8 video_len)
 {
-	int modes = 0, offset = 0, i, multi_present = 0;
+	int modes = 0, offset = 0, i, multi_present = 0, multi_len;
 	u8 vic_len, hdmi_3d_len = 0;
 	u16 mask;
 	u16 structure_all;
@@ -2774,32 +2785,84 @@ do_hdmi_vsdb_modes(struct drm_connector *connector, const u8 *db, u8 len,
 	}
 	offset += 1 + vic_len;
 
-	if (!(multi_present == 1 || multi_present == 2))
-		goto out;
-
-	if ((multi_present == 1 && len < (9 + offset)) ||
-	    (multi_present == 2 && len < (11 + offset)))
-		goto out;
-
-	if ((multi_present == 1 && hdmi_3d_len < 2) ||
-	    (multi_present == 2 && hdmi_3d_len < 4))
-		goto out;
-
-	/* 3D_Structure_ALL */
-	structure_all = (db[8 + offset] << 8) | db[9 + offset];
-
-	/* check if 3D_MASK is present */
-	if (multi_present == 2)
-		mask = (db[10 + offset] << 8) | db[11 + offset];
+	if (multi_present == 1)
+		multi_len = 2;
+	else if (multi_present == 2)
+		multi_len = 4;
 	else
-		mask = 0xffff;
+		multi_len = 0;
 
-	for (i = 0; i < 16; i++) {
-		if (mask & (1 << i))
-			modes += add_3d_struct_modes(connector,
-						     structure_all,
-						     video_db,
-						     video_len, i);
+	if (len < (8 + offset + hdmi_3d_len - 1))
+		goto out;
+
+	if (hdmi_3d_len < multi_len)
+		goto out;
+
+	if (multi_present == 1 || multi_present == 2) {
+		/* 3D_Structure_ALL */
+		structure_all = (db[8 + offset] << 8) | db[9 + offset];
+
+		/* check if 3D_MASK is present */
+		if (multi_present == 2)
+			mask = (db[10 + offset] << 8) | db[11 + offset];
+		else
+			mask = 0xffff;
+
+		for (i = 0; i < 16; i++) {
+			if (mask & (1 << i))
+				modes += add_3d_struct_modes(connector,
+						structure_all,
+						video_db,
+						video_len, i);
+		}
+	}
+
+	offset += multi_len;
+
+	for (i = 0; i < (hdmi_3d_len - multi_len); i++) {
+		int vic_index;
+		struct drm_display_mode *newmode = NULL;
+		unsigned int newflag = 0;
+		bool detail_present;
+
+		detail_present = ((db[8 + offset + i] & 0x0f) > 7);
+
+		if (detail_present && (i + 1 == hdmi_3d_len - multi_len))
+			break;
+
+		/* 2D_VIC_order_X */
+		vic_index = db[8 + offset + i] >> 4;
+
+		/* 3D_Structure_X */
+		switch (db[8 + offset + i] & 0x0f) {
+		case 0:
+			newflag = DRM_MODE_FLAG_3D_FRAME_PACKING;
+			break;
+		case 6:
+			newflag = DRM_MODE_FLAG_3D_TOP_AND_BOTTOM;
+			break;
+		case 8:
+			/* 3D_Detail_X */
+			if ((db[9 + offset + i] >> 4) == 1)
+				newflag = DRM_MODE_FLAG_3D_SIDE_BY_SIDE_HALF;
+			break;
+		}
+
+		if (newflag != 0) {
+			newmode = drm_display_mode_from_vic_index(connector,
+								  video_db,
+								  video_len,
+								  vic_index);
+
+			if (newmode) {
+				newmode->flags |= newflag;
+				drm_mode_probed_add(connector, newmode);
+				modes++;
+			}
+		}
+
+		if (detail_present)
+			i++;
 	}
 
 out:
