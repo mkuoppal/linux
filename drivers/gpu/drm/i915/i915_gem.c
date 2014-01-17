@@ -2331,20 +2331,18 @@ static bool i915_context_is_banned(const struct i915_hw_context *ctx)
 
 static void i915_set_reset_status(struct intel_ring_buffer *ring,
 				  struct drm_i915_gem_request *request,
-				  u32 acthd)
+				  const bool guilty)
 {
-	bool inside, guilty;
+	const u32 acthd = intel_ring_get_active_head(ring);
+	bool inside;
 	unsigned long offset = 0;
 	struct i915_hw_context *ctx = request->ctx;
-
-	/* Innocent until proven guilty */
-	guilty = false;
 
 	if (request->batch_obj)
 		offset = i915_gem_obj_offset(request->batch_obj,
 					     request_to_vm(request));
 
-	if (ring->hangcheck.action != HANGCHECK_WAIT &&
+	if (guilty &&
 	    i915_request_guilty(request, acthd, &inside)) {
 		DRM_DEBUG("%s hung %s bo (0x%lx ctx %d) at 0x%x\n",
 			  ring->name,
@@ -2352,8 +2350,6 @@ static void i915_set_reset_status(struct intel_ring_buffer *ring,
 			  offset,
 			  ctx ? ctx->id : 0,
 			  acthd);
-
-		guilty = true;
 	}
 
 	if (WARN_ON(!ctx))
@@ -2379,18 +2375,56 @@ static void i915_gem_free_request(struct drm_i915_gem_request *request)
 	kfree(request);
 }
 
-static void i915_gem_reset_ring_status(struct drm_i915_private *dev_priv,
-				       struct intel_ring_buffer *ring)
+static struct drm_i915_gem_request *
+i915_gem_find_first_non_complete(struct intel_ring_buffer *ring)
 {
-	u32 completed_seqno = ring->get_seqno(ring, false);
-	u32 acthd = intel_ring_get_active_head(ring);
 	struct drm_i915_gem_request *request;
+	const u32 completed_seqno = ring->get_seqno(ring, false);
 
 	list_for_each_entry(request, &ring->request_list, list) {
 		if (i915_seqno_passed(completed_seqno, request->seqno))
 			continue;
 
-		i915_set_reset_status(ring, request, acthd);
+		return request;
+	}
+
+	return NULL;
+}
+
+static void i915_gem_reset_status(struct drm_i915_private *dev_priv)
+{
+	struct intel_ring_buffer *ring;
+	struct drm_i915_gem_request *first_nc[I915_NUM_RINGS];
+	struct drm_i915_gem_request *guilty = NULL;
+	int top_score = 0;
+	int i;
+
+	for_each_ring(ring, dev_priv, i) {
+		first_nc[i] = i915_gem_find_first_non_complete(ring);
+
+		if (ring->hangcheck.score > top_score)
+			top_score = ring->hangcheck.score;
+	}
+
+	/* If multiple rings hanged with same score, blame oldest request */
+	for_each_ring(ring, dev_priv, i) {
+		if (first_nc[i] == NULL || ring->hangcheck.score < top_score)
+			continue;
+
+		if (guilty == NULL)
+			guilty = first_nc[i];
+		else if (guilty->seqno > first_nc[i]->seqno)
+			guilty = first_nc[i];
+	}
+
+	for_each_ring(ring, dev_priv, i) {
+		struct drm_i915_gem_request *request = first_nc[i];
+
+		if (request == NULL)
+			continue;
+
+		list_for_each_entry_from(request, &ring->request_list, list)
+			i915_set_reset_status(ring, request, request == guilty);
 	}
 }
 
@@ -2457,8 +2491,7 @@ void i915_gem_reset(struct drm_device *dev)
 	 * them for finding the guilty party. As the requests only borrow
 	 * their reference to the objects, the inspection must be done first.
 	 */
-	for_each_ring(ring, dev_priv, i)
-		i915_gem_reset_ring_status(dev_priv, ring);
+	i915_gem_reset_status(dev_priv);
 
 	for_each_ring(ring, dev_priv, i)
 		i915_gem_reset_ring_cleanup(dev_priv, ring);
