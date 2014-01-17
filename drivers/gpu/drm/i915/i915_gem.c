@@ -2322,29 +2322,23 @@ static bool i915_context_is_banned(const struct i915_ctx_hang_stats *hs)
 
 static void i915_set_reset_status(struct intel_ring_buffer *ring,
 				  struct drm_i915_gem_request *request,
-				  u32 acthd)
+				  u32 acthd, const bool guilty)
 {
 	struct i915_ctx_hang_stats *hs = NULL;
-	bool inside, guilty;
+	bool inside;
 	unsigned long offset = 0;
-
-	/* Innocent until proven guilty */
-	guilty = false;
 
 	if (request->batch_obj)
 		offset = i915_gem_obj_offset(request->batch_obj,
 					     request_to_vm(request));
 
-	if (ring->hangcheck.action != HANGCHECK_WAIT &&
-	    i915_request_guilty(request, acthd, &inside)) {
+	if(guilty && i915_request_guilty(request, acthd, &inside)) {
 		DRM_DEBUG("%s hung %s bo (0x%lx ctx %d) at 0x%x\n",
 			  ring->name,
 			  inside ? "inside" : "flushing",
 			  offset,
 			  request->ctx ? request->ctx->id : 0,
 			  acthd);
-
-		guilty = true;
 	}
 
 	/* If contexts are disabled or this is the default context, use
@@ -2383,12 +2377,18 @@ static void i915_gem_reset_ring_status(struct drm_i915_private *dev_priv,
 	u32 completed_seqno = ring->get_seqno(ring, false);
 	u32 acthd = intel_ring_get_active_head(ring);
 	struct drm_i915_gem_request *request;
+	bool guilty = false;
 
 	list_for_each_entry(request, &ring->request_list, list) {
 		if (i915_seqno_passed(completed_seqno, request->seqno))
 			continue;
 
-		i915_set_reset_status(ring, request, acthd);
+		if (!guilty && ring->hangcheck.score >= HANGCHECK_SCORE_GUILTY) {
+			guilty = true;
+			i915_set_reset_status(ring, request, acthd, true);
+		} else {
+			i915_set_reset_status(ring, request, acthd, false);
+		}
 	}
 }
 
