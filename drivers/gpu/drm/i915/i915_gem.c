@@ -2305,11 +2305,17 @@ static bool i915_request_guilty(struct drm_i915_gem_request *request,
 	return false;
 }
 
-static bool i915_context_is_banned(const struct i915_ctx_hang_stats *hs)
+static bool i915_context_is_banned(const struct i915_hw_context *ctx)
 {
-	const unsigned long elapsed = get_seconds() - hs->guilty_ts;
+	struct drm_i915_private *dev_priv;
+	unsigned long elapsed;
 
-	if (hs->banned)
+	BUG_ON(!ctx->last_ring);
+
+	dev_priv = ctx->last_ring->dev->dev_private;
+	elapsed = get_seconds() - ctx->hang_stats.guilty_ts;
+
+	if (ctx->hang_stats.banned)
 		return true;
 
 	if (elapsed <= DRM_I915_CTX_BAN_PERIOD) {
@@ -2324,9 +2330,9 @@ static void i915_set_reset_status(struct intel_ring_buffer *ring,
 				  struct drm_i915_gem_request *request,
 				  u32 acthd)
 {
-	struct i915_ctx_hang_stats *hs = NULL;
 	bool inside, guilty;
 	unsigned long offset = 0;
+	struct i915_hw_context *ctx = request->ctx;
 
 	/* Innocent until proven guilty */
 	guilty = false;
@@ -2341,28 +2347,21 @@ static void i915_set_reset_status(struct intel_ring_buffer *ring,
 			  ring->name,
 			  inside ? "inside" : "flushing",
 			  offset,
-			  request->ctx ? request->ctx->id : 0,
+			  ctx ? ctx->id : 0,
 			  acthd);
 
 		guilty = true;
 	}
 
-	/* If contexts are disabled or this is the default context, use
-	 * file_priv->reset_state
-	 */
-	if (request->ctx && request->ctx->id != DEFAULT_CONTEXT_ID)
-		hs = &request->ctx->hang_stats;
-	else if (request->file_priv)
-		hs = &request->file_priv->private_default_ctx->hang_stats;
+	if (WARN_ON(!ctx))
+		return;
 
-	if (hs) {
-		if (guilty) {
-			hs->banned = i915_context_is_banned(hs);
-			hs->batch_active++;
-			hs->guilty_ts = get_seconds();
-		} else {
-			hs->batch_pending++;
-		}
+	if (guilty) {
+		ctx->hang_stats.banned = i915_context_is_banned(ctx);
+		ctx->hang_stats.batch_active++;
+		ctx->hang_stats.guilty_ts = get_seconds();
+	} else {
+		ctx->hang_stats.batch_pending++;
 	}
 }
 
