@@ -2241,70 +2241,6 @@ i915_gem_request_remove_from_client(struct drm_i915_gem_request *request)
 	spin_unlock(&file_priv->mm.lock);
 }
 
-static bool i915_head_inside_object(u32 acthd, struct drm_i915_gem_object *obj,
-				    struct i915_address_space *vm)
-{
-	if (acthd >= i915_gem_obj_offset(obj, vm) &&
-	    acthd < i915_gem_obj_offset(obj, vm) + obj->base.size)
-		return true;
-
-	return false;
-}
-
-static bool i915_head_inside_request(const u32 acthd_unmasked,
-				     const u32 request_start,
-				     const u32 request_end)
-{
-	const u32 acthd = acthd_unmasked & HEAD_ADDR;
-
-	if (request_start < request_end) {
-		if (acthd >= request_start && acthd < request_end)
-			return true;
-	} else if (request_start > request_end) {
-		if (acthd >= request_start || acthd < request_end)
-			return true;
-	}
-
-	return false;
-}
-
-static struct i915_address_space *
-request_to_vm(struct drm_i915_gem_request *request)
-{
-	struct drm_i915_private *dev_priv = request->ring->dev->dev_private;
-	struct i915_address_space *vm;
-
-	if (request->ctx)
-		vm = request->ctx->vm;
-	else
-		vm = &dev_priv->gtt.base;
-
-	return vm;
-}
-
-static bool i915_request_guilty(struct drm_i915_gem_request *request,
-				const u32 acthd, bool *inside)
-{
-	/* There is a possibility that unmasked head address
-	 * pointing inside the ring, matches the batch_obj address range.
-	 * However this is extremely unlikely.
-	 */
-	if (request->batch_obj) {
-		if (i915_head_inside_object(acthd, request->batch_obj,
-					    request_to_vm(request))) {
-			*inside = true;
-			return true;
-		}
-	}
-
-	if (i915_head_inside_request(acthd, request->head, request->tail)) {
-		*inside = false;
-		return true;
-	}
-
-	return false;
-}
-
 static bool i915_context_is_banned(const struct i915_hw_context *ctx)
 {
 	struct drm_i915_private *dev_priv;
@@ -2329,29 +2265,9 @@ static bool i915_context_is_banned(const struct i915_hw_context *ctx)
 	return false;
 }
 
-static void i915_set_reset_status(struct intel_ring_buffer *ring,
-				  struct drm_i915_gem_request *request,
-				  const bool guilty)
+static void i915_gem_context_set_stats(struct i915_hw_context *ctx,
+				       const bool guilty)
 {
-	const u32 acthd = intel_ring_get_active_head(ring);
-	bool inside;
-	unsigned long offset = 0;
-	struct i915_hw_context *ctx = request->ctx;
-
-	if (request->batch_obj)
-		offset = i915_gem_obj_offset(request->batch_obj,
-					     request_to_vm(request));
-
-	if (guilty &&
-	    i915_request_guilty(request, acthd, &inside)) {
-		DRM_DEBUG("%s hung %s bo (0x%lx ctx %d) at 0x%x\n",
-			  ring->name,
-			  inside ? "inside" : "flushing",
-			  offset,
-			  ctx ? ctx->id : 0,
-			  acthd);
-	}
-
 	if (WARN_ON(!ctx))
 		return;
 
@@ -2418,13 +2334,14 @@ static void i915_gem_reset_status(struct drm_i915_private *dev_priv)
 	}
 
 	for_each_ring(ring, dev_priv, i) {
-		struct drm_i915_gem_request *request = first_nc[i];
+		const struct drm_i915_gem_request *request = first_nc[i];
 
 		if (request == NULL)
 			continue;
 
 		list_for_each_entry_from(request, &ring->request_list, list)
-			i915_set_reset_status(ring, request, request == guilty);
+			i915_gem_context_set_stats(request->ctx,
+						   request == guilty);
 	}
 }
 
