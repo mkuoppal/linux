@@ -2301,6 +2301,9 @@ int i915_gem_context_create_ioctl(struct drm_device *dev, void *data,
 int i915_gem_context_destroy_ioctl(struct drm_device *dev, void *data,
 				   struct drm_file *file);
 
+/* i915_gem_render_state.c */
+int i915_gem_init_render_state(struct intel_ring_buffer *ring);
+
 /* i915_gem_evict.c */
 int __must_check i915_gem_evict_something(struct drm_device *dev,
 					  struct i915_address_space *vm,
@@ -2384,6 +2387,7 @@ void i915_get_extra_instdone(struct drm_device *dev, uint32_t *instdone);
 const char *i915_cache_level_str(int type);
 
 /* i915_cmd_parser.c */
+u32 *i915_gem_vmap_obj(struct drm_i915_gem_object *obj);
 int i915_cmd_parser_get_version(void);
 void i915_cmd_parser_init_ring(struct intel_ring_buffer *ring);
 bool i915_needs_cmd_parser(struct intel_ring_buffer *ring);
