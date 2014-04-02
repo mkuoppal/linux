@@ -3315,8 +3315,17 @@ i915_ring_stop_get(void *data, u64 *val)
 {
 	struct drm_device *dev = data;
 	struct drm_i915_private *dev_priv = dev->dev_private;
+	int ret;
 
 	*val = dev_priv->gpu_error.stop_rings;
+
+	ret = mutex_lock_interruptible(&dev->struct_mutex);
+	if (ret)
+		return ret;
+
+	ret = i915_gem_init_render_state(&dev_priv->ring[RCS]);
+	mutex_unlock(&dev->struct_mutex);
+	printk("init returned %d\n", ret);
 
 	return 0;
 }
