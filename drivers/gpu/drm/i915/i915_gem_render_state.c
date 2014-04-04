@@ -31,7 +31,7 @@
 
 struct i915_render_state_obj {
 	struct drm_i915_gem_object *obj;
-	u32 *base;
+	u8 *batch;
 	u32 size;
 	u32 len;
 };
@@ -95,13 +95,7 @@ static int gen6_generate_batch(struct i915_render_state_obj *so)
 
 static int gen7_generate_batch(struct i915_render_state_obj *so)
 {
-	unsigned int i = 0;
-	u32 *b = so->base;
-
-	b[i++] = MI_BATCH_BUFFER_END;
-	so->len = i * 4;
-
-	return 0;
+	return gen7_null_render_state(so);
 }
 
 static int gen8_generate_batch(struct i915_render_state_obj *so)

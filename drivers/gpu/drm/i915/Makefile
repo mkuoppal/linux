@@ -19,6 +19,7 @@ i915-$(CONFIG_DEBUG_FS) += i915_debugfs.o
 i915-y += i915_cmd_parser.o \
 	  i915_gem_context.o \
 	  i915_gem_render_state.o \
+	  renderstate_gen7.o \
 	  i915_gem_debug.o \
 	  i915_gem_dmabuf.o \
 	  i915_gem_evict.o \
