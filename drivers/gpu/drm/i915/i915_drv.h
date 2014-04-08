@@ -603,6 +603,14 @@ struct i915_hw_context {
 	struct list_head link;
 };
 
+struct i915_render_state {
+	struct drm_i915_gem_object *obj;
+	unsigned long ggtt_offset;
+	u8 *batch;
+	u32 size;
+	u32 len;
+};
+
 struct i915_fbc {
 	unsigned long size;
 	unsigned int fb_id;
@@ -2302,6 +2310,8 @@ int i915_gem_context_create_ioctl(struct drm_device *dev, void *data,
 int i915_gem_context_destroy_ioctl(struct drm_device *dev, void *data,
 				   struct drm_file *file);
 
+/* i915_gem_render_state.c */
+int i915_gem_init_render_state(struct intel_ring_buffer *ring);
 /* i915_gem_evict.c */
 int __must_check i915_gem_evict_something(struct drm_device *dev,
 					  struct i915_address_space *vm,
