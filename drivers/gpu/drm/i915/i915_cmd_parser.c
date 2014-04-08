@@ -694,7 +694,7 @@ static bool valid_reg(const u32 *table, int count, u32 addr)
 	return false;
 }
 
-static u32 *vmap_batch(struct drm_i915_gem_object *obj)
+void *i915_gem_vmap_obj(struct drm_i915_gem_object *obj)
 {
 	int i;
 	void *addr = NULL;
@@ -872,7 +872,7 @@ int i915_parse_cmds(struct intel_ring_buffer *ring,
 		return ret;
 	}
 
-	batch_base = vmap_batch(batch_obj);
+	batch_base = i915_gem_vmap_obj(batch_obj);
 	if (!batch_base) {
 		DRM_DEBUG_DRIVER("CMD: Failed to vmap batch\n");
 		i915_gem_object_unpin_pages(batch_obj);

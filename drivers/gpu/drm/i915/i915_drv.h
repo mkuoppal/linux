@@ -2385,6 +2385,7 @@ void i915_get_extra_instdone(struct drm_device *dev, uint32_t *instdone);
 const char *i915_cache_level_str(int type);
 
 /* i915_cmd_parser.c */
+void __must_check *i915_gem_vmap_obj(struct drm_i915_gem_object *obj);
 int i915_cmd_parser_get_version(void);
 void i915_cmd_parser_init_ring(struct intel_ring_buffer *ring);
 bool i915_needs_cmd_parser(struct intel_ring_buffer *ring);
