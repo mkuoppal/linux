@@ -31,7 +31,8 @@ i915-y += i915_cmd_parser.o \
 	  i915_irq.o \
 	  i915_trace_points.o \
 	  intel_ringbuffer.o \
-	  intel_uncore.o
+	  intel_uncore.o \
+	  intel_batchbuffer.o
 
 # modesetting core code
 i915-y += intel_bios.o \
