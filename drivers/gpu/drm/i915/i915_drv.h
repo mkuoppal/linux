@@ -2312,6 +2312,9 @@ int i915_gem_context_destroy_ioctl(struct drm_device *dev, void *data,
 
 /* i915_gem_render_state.c */
 int i915_gem_init_render_state(struct intel_ring_buffer *ring);
+int gen7_setup_null_render_state(struct drm_device *dev,
+				 struct i915_render_state *bo);
+
 /* i915_gem_evict.c */
 int __must_check i915_gem_evict_something(struct drm_device *dev,
 					  struct i915_address_space *vm,

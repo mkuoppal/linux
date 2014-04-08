@@ -92,6 +92,9 @@ int i915_gem_init_render_state(struct intel_ring_buffer *ring)
 		return PTR_ERR(so);
 
 	switch (gen) {
+	case 7:
+		ret = gen7_setup_null_render_state(ring->dev, so);
+		break;
 	default:
 		DRM_DEBUG("gen %x initial render state not implemented\n", gen);
 		ret = 0;
