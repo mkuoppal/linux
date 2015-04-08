@@ -3610,6 +3610,9 @@ static inline bool intel_init_svm(struct drm_i915_private *dev_priv)
 }
 #endif
 
+extern int intel_exec_mm_ioctl(struct drm_device *dev, void *data,
+			       struct drm_file *file);
+
 /* overlay */
 extern struct intel_overlay_error_state *
 intel_overlay_capture_error_state(struct drm_i915_private *dev_priv);

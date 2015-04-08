@@ -260,6 +260,7 @@ typedef struct _drm_i915_sarea {
 #define DRM_I915_GEM_CONTEXT_SETPARAM	0x35
 #define DRM_I915_PERF_OPEN		0x36
 #define DRM_I915_GEM_CONTEXT_CREATE2	0x37
+#define DRM_I915_EXEC_MM		0x38
 
 #define DRM_IOCTL_I915_INIT		DRM_IOW( DRM_COMMAND_BASE + DRM_I915_INIT, drm_i915_init_t)
 #define DRM_IOCTL_I915_FLUSH		DRM_IO ( DRM_COMMAND_BASE + DRM_I915_FLUSH)
@@ -315,6 +316,7 @@ typedef struct _drm_i915_sarea {
 #define DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM	DRM_IOWR (DRM_COMMAND_BASE + DRM_I915_GEM_CONTEXT_SETPARAM, struct drm_i915_gem_context_param)
 #define DRM_IOCTL_I915_PERF_OPEN	DRM_IOW(DRM_COMMAND_BASE + DRM_I915_PERF_OPEN, struct drm_i915_perf_open_param)
 #define DRM_IOCTL_I915_GEM_CONTEXT_CREATE2	DRM_IOWR (DRM_COMMAND_BASE + DRM_I915_GEM_CONTEXT_CREATE2, struct drm_i915_gem_context_create2)
+#define DRM_IOCTL_I915_EXEC_MM			DRM_IOWR (DRM_COMMAND_BASE + DRM_I915_EXEC_MM, struct drm_i915_exec_mm)
 
 /* Allow drivers to submit batchbuffers directly to hardware, relying
  * on the security mechanisms provided by hardware.
@@ -1378,6 +1380,40 @@ enum drm_i915_perf_record_type {
 	DRM_I915_PERF_RECORD_OA_BUFFER_LOST = 3,
 
 	DRM_I915_PERF_RECORD_MAX /* non-ABI */
+};
+
+/**
+ * drm_i915_exec_mm - shared address space execbuf
+ * @batch_ptr: address of batch buffer (in context's CPU address space)
+ * @ctx_id: context to use for execution
+ * @ring_id: ring to which this context will be submitted
+ * @flags: see flags
+ * @fence: returned fence handle
+ * @fence_dep_count: number of fences this execution depends on
+ * @fence_deps: array of fence IDs (u32) this execution depends on
+ *
+ * This simplified execbuf just executes an MI_BATCH_BUFFER_START at
+ * @batch_ptr using @ctx_id as the context.  The context will indicate
+ * which address space the @batch_ptr will use.
+ *
+ * Note @batch_ptr must be dword aligned.
+ *
+ * By default, the kernel will simply execute the address given on the GPU.
+ * If the %I915_EXEC_MM_FENCE flag is passed in the @flags field however,
+ * the kernel will return a Android native sync object for the caller to
+ * use to synchronize execution (see the android-native-sync(7) man page).
+ *
+ */
+struct drm_i915_exec_mm {
+	__u64 batch_ptr;
+	__u32 ctx_id;
+	__u32 ring_id; /* see execbuffer2 flags */
+	__u32 flags;
+#define I915_EXEC_MM_FENCE (1<<0)
+	__u32 pad;
+	__u32 fence;
+	__u32 fence_dep_count;
+	__u64 fence_deps;
 };
 
 #if defined(__cplusplus)
