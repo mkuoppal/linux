@@ -39,6 +39,7 @@
 #include <linux/backlight.h>
 #include <linux/hashtable.h>
 #include <linux/intel-iommu.h>
+#include <linux/intel-svm.h>
 #include <linux/kref.h>
 #include <linux/pm_qos.h>
 #include <linux/reservation.h>
@@ -943,6 +944,8 @@ enum i915_cache_level {
  * @remap_slice: l3 row remapping information.
  * @flags: context specific flags:
  *         CONTEXT_NO_ZEROMAP: do not allow mapping things to page 0.
+ *         CONTEXT_NO_ERROR_CAPTURE: do not capture gpu state on hang.
+ *         CONTEXT_SVM: context with 1:1 gpu vs cpu mapping of vm.
  * @file_priv: filp associated with this context (NULL for global default
  *	       context).
  * @hang_stats: information about the role of this context in possible GPU
@@ -966,6 +969,7 @@ struct i915_gem_context {
 	unsigned long flags;
 #define CONTEXT_NO_ZEROMAP		BIT(0)
 #define CONTEXT_NO_ERROR_CAPTURE	BIT(1)
+#define CONTEXT_SVM			BIT(2)
 
 	/* Unique identifier for this context, used by the hw for tracking */
 	unsigned int hw_id;
@@ -986,6 +990,9 @@ struct i915_gem_context {
 	u32 desc_template;
 	struct atomic_notifier_head status_notifier;
 	bool execlists_force_single_submission;
+
+	u32 pasid; /* svm, 20 bits */
+	struct task_struct *task;
 
 	struct list_head link;
 
@@ -2163,6 +2170,8 @@ struct drm_i915_private {
 	bool suspended_to_idle;
 	struct i915_suspend_saved_registers regfile;
 	struct vlv_s0ix_state vlv_s0ix_state;
+
+	bool svm_available;
 
 	enum {
 		I915_SAGV_UNKNOWN = 0,
@@ -3582,6 +3591,24 @@ extern bool intel_set_memory_cxsr(struct drm_i915_private *dev_priv,
 
 int i915_reg_read_ioctl(struct drm_device *dev, void *data,
 			struct drm_file *file);
+
+/* svm */
+#ifdef CONFIG_INTEL_IOMMU_SVM
+static inline bool intel_init_svm(struct drm_i915_private *dev_priv)
+{
+	dev_priv->svm_available = USES_FULL_48BIT_PPGTT(dev_priv) &&
+		intel_svm_available(&dev_priv->drm.pdev->dev);
+
+	return dev_priv->svm_available;
+}
+#else
+static inline bool intel_init_svm(struct drm_i915_private *dev_priv)
+{
+	dev_priv->svm_available = false;
+
+	return dev_priv->svm_available;
+}
+#endif
 
 /* overlay */
 extern struct intel_overlay_error_state *

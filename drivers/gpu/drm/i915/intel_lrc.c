@@ -190,12 +190,6 @@
 #define CTX_R_PWR_CLK_STATE		0x42
 #define CTX_GPGPU_CSR_BASE_ADDRESS	0x44
 
-#define GEN8_CTX_VALID (1<<0)
-#define GEN8_CTX_FORCE_PD_RESTORE (1<<1)
-#define GEN8_CTX_FORCE_RESTORE (1<<2)
-#define GEN8_CTX_L3LLC_COHERENT (1<<5)
-#define GEN8_CTX_PRIVILEGE (1<<8)
-
 #define ASSIGN_CTX_REG(reg_state, pos, reg, val) do { \
 	(reg_state)[(pos)+0] = i915_mmio_reg_offset(reg); \
 	(reg_state)[(pos)+1] = (val); \
@@ -212,16 +206,13 @@
 	reg_state[CTX_PDP0_LDW + 1] = lower_32_bits(px_dma(&ppgtt->pml4)); \
 } while (0)
 
-enum {
-	FAULT_AND_HANG = 0,
-	FAULT_AND_HALT, /* Debug only */
-	FAULT_AND_STREAM,
-	FAULT_AND_CONTINUE /* Unsupported */
-};
-#define GEN8_CTX_ID_SHIFT 32
-#define GEN8_CTX_ID_WIDTH 21
-#define GEN8_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT	0x17
-#define GEN9_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT	0x26
+#define ASSIGN_CTX_SVM(reg_state, ctx, engine) do { \
+		ASSIGN_CTX_REG(reg_state, CTX_PDP0_UDW, \
+			       GEN8_RING_PDP_UDW((engine), 0), 0); \
+		ASSIGN_CTX_REG(reg_state, CTX_PDP0_LDW, \
+			       GEN8_RING_PDP_LDW((engine), 0), (ctx)->pasid); \
+} while (0)
+
 
 /* Typical size of the average request (2 pipecontrols and a MI_BB) */
 #define EXECLISTS_REQUEST_SIZE 64 /* bytes */
@@ -278,10 +269,6 @@ logical_ring_init_platform_invariants(struct intel_engine_cs *engine)
 		IS_BXT_REVID(dev_priv, 0, BXT_REVID_A1) &&
 		(engine->id == VCS || engine->id == VCS2);
 
-	engine->ctx_desc_template = GEN8_CTX_VALID;
-	if (IS_GEN8(dev_priv))
-		engine->ctx_desc_template |= GEN8_CTX_L3LLC_COHERENT;
-	engine->ctx_desc_template |= GEN8_CTX_PRIVILEGE;
 
 	/* TODO: WaDisableLiteRestore when we start using semaphore
 	 * signalling between Command Streamers */
@@ -359,10 +346,24 @@ execlists_update_context_pdps(struct i915_hw_ppgtt *ppgtt, u32 *reg_state)
 	ASSIGN_CTX_PDP(ppgtt, reg_state, 0);
 }
 
+static bool
+execlists_context_needs_pdps_update(const struct i915_gem_context *ctx)
+{
+	if (!ctx->ppgtt)
+		return false;
+
+	if (ctx->flags & CONTEXT_SVM)
+		return false;
+
+	if (USES_FULL_48BIT_PPGTT(ctx->i915))
+		return false;
+
+	return true;
+}
+
 static u64 execlists_update_context(struct drm_i915_gem_request *rq)
 {
 	struct intel_context *ce = &rq->ctx->engine[rq->engine->id];
-	struct i915_hw_ppgtt *ppgtt = rq->ctx->ppgtt;
 	u32 *reg_state = ce->lrc_reg_state;
 
 	reg_state[CTX_RING_TAIL+1] = rq->tail;
@@ -372,8 +373,8 @@ static u64 execlists_update_context(struct drm_i915_gem_request *rq)
 	 * PML4 is allocated during ppgtt init, so this is not needed
 	 * in 48-bit mode.
 	 */
-	if (ppgtt && !USES_FULL_48BIT_PPGTT(ppgtt->base.dev))
-		execlists_update_context_pdps(ppgtt, reg_state);
+	if (execlists_context_needs_pdps_update(rq->ctx))
+		execlists_update_context_pdps(rq->ctx->ppgtt, reg_state);
 
 	return ce->lrc_desc;
 }
@@ -1501,14 +1502,13 @@ static int gen8_emit_bb_start(struct drm_i915_gem_request *req,
 	 * it is unsafe in case of lite-restore (because the ctx is
 	 * not idle). PML4 is allocated during ppgtt init so this is
 	 * not needed in 48-bit.*/
-	if (req->ctx->ppgtt &&
-	    (intel_engine_flag(req->engine) & req->ctx->ppgtt->pd_dirty_rings)) {
-		if (!USES_FULL_48BIT_PPGTT(req->i915) &&
-		    !intel_vgpu_active(req->i915)) {
-			ret = intel_logical_ring_emit_pdps(req);
-			if (ret)
-				return ret;
-		}
+
+	if (execlists_context_needs_pdps_update(req->ctx) &&
+	    (intel_engine_flag(req->engine) & req->ctx->ppgtt->pd_dirty_rings) &&
+	    !intel_vgpu_active(req->i915)) {
+		ret = intel_logical_ring_emit_pdps(req);
+		if (ret)
+			return ret;
 
 		req->ctx->ppgtt->pd_dirty_rings &= ~intel_engine_flag(req->engine);
 	}
@@ -2131,7 +2131,9 @@ static void execlists_init_reg_state(u32 *reg_state,
 	ASSIGN_CTX_REG(reg_state, CTX_PDP0_LDW, GEN8_RING_PDP_LDW(engine, 0),
 		       0);
 
-	if (USES_FULL_48BIT_PPGTT(ppgtt->base.dev)) {
+	if (ctx->flags & CONTEXT_SVM) {
+		ASSIGN_CTX_SVM(reg_state, ctx, engine);
+	} else if (USES_FULL_48BIT_PPGTT(ppgtt->base.dev)) {
 		/* 64b PPGTT (48bit canonical)
 		 * PDP0_DESCRIPTOR contains the base address to PML4 and
 		 * other PDP Descriptors are ignored.

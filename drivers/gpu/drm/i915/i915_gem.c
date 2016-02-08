@@ -4367,6 +4367,13 @@ i915_gem_init_hw(struct drm_i915_private *dev_priv)
 		}
 	}
 
+	if (INTEL_GEN(dev_priv) >= 8) {
+		if (intel_init_svm(dev_priv))
+			DRM_DEBUG_DRIVER("Initialized Intel SVM support\n");
+		else
+			DRM_ERROR("Failed to enable Intel SVM support\n");
+	}
+
 	i915_gem_init_swizzling(dev_priv);
 
 	/*

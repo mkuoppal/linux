@@ -134,6 +134,38 @@ static int get_context_size(struct drm_i915_private *dev_priv)
 	return ret;
 }
 
+static int i915_gem_context_svm_init(struct i915_gem_context *ctx)
+{
+	struct device *dev = &ctx->i915->drm.pdev->dev;
+	int ret;
+
+	GEM_BUG_ON(ctx->task);
+	GEM_BUG_ON(!ctx->i915->svm_available);
+
+	get_task_struct(current);
+
+	ret = intel_svm_bind_mm(dev, &ctx->pasid, 0, NULL);
+	if (ret) {
+		DRM_DEBUG_DRIVER("pasid alloc fail: %d\n", ret);
+		put_task_struct(current);
+		return ret;
+	}
+
+	ctx->task = current;
+
+	return 0;
+}
+
+static void i915_gem_context_svm_fini(struct i915_gem_context *ctx)
+{
+	struct device *dev = &ctx->i915->drm.pdev->dev;
+
+	GEM_BUG_ON(!ctx->task);
+
+	intel_svm_unbind_mm(dev, ctx->pasid);
+	put_task_struct(ctx->task);
+}
+
 void i915_gem_context_free(struct kref *ctx_ref)
 {
 	struct i915_gem_context *ctx = container_of(ctx_ref, typeof(*ctx), ref);
@@ -142,6 +174,9 @@ void i915_gem_context_free(struct kref *ctx_ref)
 	lockdep_assert_held(&ctx->i915->drm.struct_mutex);
 	trace_i915_context_free(ctx);
 	GEM_BUG_ON(!ctx->closed);
+
+	if (ctx->flags & CONTEXT_SVM)
+		i915_gem_context_svm_fini(ctx);
 
 	i915_ppgtt_put(ctx->ppgtt);
 
@@ -258,9 +293,36 @@ static int assign_hw_id(struct drm_i915_private *dev_priv, unsigned *out)
 	return 0;
 }
 
+static u32 __create_ctx_desc(struct drm_i915_private *dev_priv,
+			     const u32 flags)
+{
+	u32 desc = GEN8_CTX_VALID;
+
+	if (flags & I915_GEM_CONTEXT_SVM) {
+		desc |= INTEL_ADVANCED_CONTEXT <<
+			GEN8_CTX_ADDRESSING_MODE_SHIFT;
+		/*
+		 * Switch to stream once we have a scheduler and can
+		 * re-submit contexts.
+		 */
+		desc |= FAULT_AND_HALT << GEN8_CTX_FAULT_SHIFT;
+	} else {
+		if (IS_GEN8(dev_priv))
+			desc |= GEN8_CTX_L3LLC_COHERENT;
+
+		desc |= GEN8_CTX_PRIVILEGE;
+
+		desc |= GEN8_CTX_ADDRESSING_MODE(dev_priv) <<
+			GEN8_CTX_ADDRESSING_MODE_SHIFT;
+	}
+
+	return desc;
+}
+
 static struct i915_gem_context *
 __create_hw_context(struct drm_i915_private *dev_priv,
-		    struct drm_i915_file_private *file_priv)
+		    struct drm_i915_file_private *file_priv,
+		    u32 flags)
 {
 	struct i915_gem_context *ctx;
 	int ret;
@@ -331,8 +393,8 @@ __create_hw_context(struct drm_i915_private *dev_priv,
 
 	ctx->bannable = true;
 	ctx->ring_size = 4 * PAGE_SIZE;
-	ctx->desc_template = GEN8_CTX_ADDRESSING_MODE(dev_priv) <<
-			     GEN8_CTX_ADDRESSING_MODE_SHIFT;
+	ctx->desc_template = __create_ctx_desc(dev_priv, flags);
+
 	ATOMIC_INIT_NOTIFIER_HEAD(&ctx->status_notifier);
 
 	return ctx;
@@ -356,10 +418,11 @@ __i915_gem_create_context(struct drm_i915_private *dev_priv,
 			  u32 flags)
 {
 	struct i915_gem_context *ctx;
+	int ret;
 
 	lockdep_assert_held(&dev_priv->drm.struct_mutex);
 
-	ctx = __create_hw_context(dev_priv, file_priv);
+	ctx = __create_hw_context(dev_priv, file_priv, flags);
 	if (IS_ERR(ctx))
 		return ctx;
 
@@ -368,19 +431,31 @@ __i915_gem_create_context(struct drm_i915_private *dev_priv,
 
 		ppgtt = i915_ppgtt_create(dev_priv, file_priv, ctx->name);
 		if (IS_ERR(ppgtt)) {
-			DRM_DEBUG_DRIVER("PPGTT setup failed (%ld)\n",
-					 PTR_ERR(ppgtt));
-			idr_remove(&file_priv->context_idr, ctx->user_handle);
-			context_close(ctx);
-			return ERR_CAST(ppgtt);
+			ret = PTR_ERR(ppgtt);
+			DRM_DEBUG_DRIVER("PPGTT setup failed (%d)\n", ret);
+			goto free_ctx;
 		}
 
 		ctx->ppgtt = ppgtt;
 	}
 
+	if (flags & I915_GEM_CONTEXT_SVM) {
+		ret = i915_gem_context_svm_init(ctx);
+		if (ret)
+			goto free_ctx;
+
+		ctx->flags |= CONTEXT_SVM;
+	}
+
 	trace_i915_context_create(ctx);
 
 	return ctx;
+
+free_ctx:
+	idr_remove(&file_priv->context_idr, ctx->user_handle);
+	context_close(ctx);
+
+	return ERR_PTR(ret);
 }
 
 static struct i915_gem_context *
@@ -1017,6 +1092,7 @@ static bool client_is_banned(struct drm_i915_file_private *file_priv)
 int i915_gem_context_create2_ioctl(struct drm_device *dev, void *data,
 				   struct drm_file *file)
 {
+	struct drm_i915_private *dev_priv = to_i915(dev);
 	struct drm_i915_gem_context_create2 *args = data;
 	struct drm_i915_file_private *file_priv = file->driver_priv;
 	struct i915_gem_context *ctx;
@@ -1037,7 +1113,7 @@ int i915_gem_context_create2_ioctl(struct drm_device *dev, void *data,
 		return -EIO;
 	}
 
-	if (flags & I915_GEM_CONTEXT_SVM)
+	if ((flags & I915_GEM_CONTEXT_SVM) && !dev_priv->svm_available)
 		return -ENODEV;
 
 	if (USES_FULL_PPGTT(dev))
