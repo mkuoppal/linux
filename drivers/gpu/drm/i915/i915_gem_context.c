@@ -351,8 +351,9 @@ err_out:
  * well as an idle case.
  */
 static struct i915_gem_context *
-i915_gem_create_context(struct drm_i915_private *dev_priv,
-			struct drm_i915_file_private *file_priv)
+__i915_gem_create_context(struct drm_i915_private *dev_priv,
+			  struct drm_i915_file_private *file_priv,
+			  u32 flags)
 {
 	struct i915_gem_context *ctx;
 
@@ -362,7 +363,7 @@ i915_gem_create_context(struct drm_i915_private *dev_priv,
 	if (IS_ERR(ctx))
 		return ctx;
 
-	if (USES_FULL_PPGTT(dev_priv)) {
+	if (flags & (I915_GEM_CONTEXT_PPGTT | I915_GEM_CONTEXT_SVM)) {
 		struct i915_hw_ppgtt *ppgtt;
 
 		ppgtt = i915_ppgtt_create(dev_priv, file_priv, ctx->name);
@@ -380,6 +381,15 @@ i915_gem_create_context(struct drm_i915_private *dev_priv,
 	trace_i915_context_create(ctx);
 
 	return ctx;
+}
+
+static struct i915_gem_context *
+i915_gem_create_context(struct drm_i915_private *dev_priv,
+			struct drm_i915_file_private *file_priv)
+{
+	const u32 flags = USES_FULL_PPGTT(dev) ? I915_GEM_CONTEXT_PPGTT : 0;
+
+	return __i915_gem_create_context(dev_priv, file_priv, flags);
 }
 
 /**
@@ -1004,18 +1014,19 @@ static bool client_is_banned(struct drm_i915_file_private *file_priv)
 	return file_priv->context_bans > I915_MAX_CLIENT_CONTEXT_BANS;
 }
 
-int i915_gem_context_create_ioctl(struct drm_device *dev, void *data,
-				  struct drm_file *file)
+int i915_gem_context_create2_ioctl(struct drm_device *dev, void *data,
+				   struct drm_file *file)
 {
-	struct drm_i915_gem_context_create *args = data;
+	struct drm_i915_gem_context_create2 *args = data;
 	struct drm_i915_file_private *file_priv = file->driver_priv;
 	struct i915_gem_context *ctx;
+	u32 flags = args->flags;
 	int ret;
 
 	if (!contexts_enabled(dev))
 		return -ENODEV;
 
-	if (args->pad != 0)
+	if (flags & ~(I915_GEM_CONTEXT_PPGTT | I915_GEM_CONTEXT_SVM))
 		return -EINVAL;
 
 	if (client_is_banned(file_priv)) {
@@ -1026,17 +1037,43 @@ int i915_gem_context_create_ioctl(struct drm_device *dev, void *data,
 		return -EIO;
 	}
 
+	if (flags & I915_GEM_CONTEXT_SVM)
+		return -ENODEV;
+
+	if (USES_FULL_PPGTT(dev))
+		flags |= I915_GEM_CONTEXT_PPGTT;
+
 	ret = i915_mutex_lock_interruptible(dev);
 	if (ret)
 		return ret;
 
-	ctx = i915_gem_create_context(to_i915(dev), file_priv);
+	ctx = __i915_gem_create_context(to_i915(dev), file_priv, flags);
 	mutex_unlock(&dev->struct_mutex);
 	if (IS_ERR(ctx))
 		return PTR_ERR(ctx);
 
 	args->ctx_id = ctx->user_handle;
 	DRM_DEBUG("HW context %d created\n", args->ctx_id);
+	return 0;
+}
+
+int i915_gem_context_create_ioctl(struct drm_device *dev, void *data,
+				  struct drm_file *file)
+{
+	struct drm_i915_gem_context_create *args = data;
+	struct drm_i915_gem_context_create2 args2;
+	int ret;
+
+	if (args->pad != 0)
+		return -EINVAL;
+
+	args2.flags = 0;
+
+	ret = i915_gem_context_create2_ioctl(dev, &args2, file);
+	if (ret)
+		return ret;
+
+	args->ctx_id = args2.ctx_id;
 
 	return 0;
 }

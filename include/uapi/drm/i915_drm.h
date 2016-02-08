@@ -259,6 +259,7 @@ typedef struct _drm_i915_sarea {
 #define DRM_I915_GEM_CONTEXT_GETPARAM	0x34
 #define DRM_I915_GEM_CONTEXT_SETPARAM	0x35
 #define DRM_I915_PERF_OPEN		0x36
+#define DRM_I915_GEM_CONTEXT_CREATE2	0x37
 
 #define DRM_IOCTL_I915_INIT		DRM_IOW( DRM_COMMAND_BASE + DRM_I915_INIT, drm_i915_init_t)
 #define DRM_IOCTL_I915_FLUSH		DRM_IO ( DRM_COMMAND_BASE + DRM_I915_FLUSH)
@@ -313,6 +314,7 @@ typedef struct _drm_i915_sarea {
 #define DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM	DRM_IOWR (DRM_COMMAND_BASE + DRM_I915_GEM_CONTEXT_GETPARAM, struct drm_i915_gem_context_param)
 #define DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM	DRM_IOWR (DRM_COMMAND_BASE + DRM_I915_GEM_CONTEXT_SETPARAM, struct drm_i915_gem_context_param)
 #define DRM_IOCTL_I915_PERF_OPEN	DRM_IOW(DRM_COMMAND_BASE + DRM_I915_PERF_OPEN, struct drm_i915_perf_open_param)
+#define DRM_IOCTL_I915_GEM_CONTEXT_CREATE2	DRM_IOWR (DRM_COMMAND_BASE + DRM_I915_GEM_CONTEXT_CREATE2, struct drm_i915_gem_context_create2)
 
 /* Allow drivers to submit batchbuffers directly to hardware, relying
  * on the security mechanisms provided by hardware.
@@ -1162,6 +1164,22 @@ struct drm_i915_gem_context_create {
 	/*  output: id of new context*/
 	__u32 ctx_id;
 	__u32 pad;
+};
+
+/*
+ * SVM handling
+ *
+ * A context can opt in to SVM support (thereby using its CPU page tables
+ * when accessing data from the GPU) by using the %I915_ENABLE_SVM flag
+ * and passing an existing context id.  This is a one way transition; SVM
+ * contexts can not be downgraded into PPGTT contexts once converted.
+ */
+#define I915_GEM_CONTEXT_PPGTT		BIT(0)
+#define I915_GEM_CONTEXT_SVM		BIT(1)
+struct drm_i915_gem_context_create2 {
+	/*  output: id of new context*/
+	__u32 ctx_id;
+	__u32 flags;
 };
 
 struct drm_i915_gem_context_destroy {

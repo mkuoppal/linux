@@ -3321,6 +3321,8 @@ static inline bool i915_gem_context_is_default(const struct i915_gem_context *c)
 
 int i915_gem_context_create_ioctl(struct drm_device *dev, void *data,
 				  struct drm_file *file);
+int i915_gem_context_create2_ioctl(struct drm_device *dev, void *data,
+				   struct drm_file *file);
 int i915_gem_context_destroy_ioctl(struct drm_device *dev, void *data,
 				   struct drm_file *file);
 int i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data,
